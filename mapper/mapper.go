@@ -1,176 +1,185 @@
 package mapper
 
 import (
-	"github.com/golang/glog"
-
+	"flag"
+	"fmt"
 	"reflect"
+
+	"github.com/golang/glog"
 )
 
+const (
+	SrcKeyIndex = iota
+	DestKeyIndex
+)
+
+// NewMapper func returns new uninitialised Mapper.
+// New maps should be created with CreateMap func.
+// After creating maps call Init to initialise Mapper.
 func NewMapper() *Mapper {
 	return &Mapper{
-		profiles: make(map[reflect.Type]map[string]string),
-		maps:     make(map[reflect.Type]reflect.Type),
+		isInitialised: false,
+		profiles:      make(map[string][][2]string),
+		profilesOpts:  make(map[string]*profileOptions),
 	}
 }
 
+// Mapper struct contains maps for registered pairs of types
+// and profiles for resolving struct fields conversions.
 type Mapper struct {
-	profiles map[reflect.Type]map[string]string
-	maps     map[reflect.Type]reflect.Type
+	isInitialised bool                            // checks if Mapper was initialised before usage
+	profiles      map[string][][2]string          // map of struct fields: ["srcType_destType"][]["src_key", "dest_key"]
+	profilesOpts  map[string]*profileOptions      // options for profiles, such as reverse mapping, etc
+	maps          []map[reflect.Type]reflect.Type // pairs of types to map
+}
+
+// typeMeta struct contains meta info about struct fields
+// used to resolve conventions between fields names and tags.
+type typeMeta struct {
+	keysToTags map[string]string
+	tagsToKeys map[string]string
+}
+
+// profileOptions struct contains additional data for structs mapping.
+type profileOptions struct {
+	reverseMap bool
+}
+
+// getProfileKey converts src and dest types in string key representation.
+func getProfileKey(srcType reflect.Type, destType reflect.Type) string {
+	return fmt.Sprintf("%s_%s", srcType.Name(), destType.Name())
 }
 
 // CreateMap func creates new spec for types mapping.
+// CreateMap should be called ONLY before Init function call.
+// Provided map can be reversed with chained Reverse function:
+//	CreateMap((*Source)(nil), (*Destination)(nil)).Reverse()
+// You can create conversion between slices with MapSlices func
+//	CreateMap((*Source)(nil), (*Destination)(nil)).MapSlices().
 func (o *Mapper) CreateMap(src interface{}, dest interface{}) *Mapper {
-	o.maps[reflect.TypeOf(src).Elem()] = reflect.TypeOf(dest).Elem()
-	// TODO remove workaround with slices mapping to MapSlices() extension
-	o.maps[reflect.SliceOf(reflect.TypeOf(src).Elem())] = reflect.SliceOf(reflect.TypeOf(dest).Elem())
+	typesMap := make(map[reflect.Type]reflect.Type)
+	typesMap[reflect.TypeOf(src).Elem()] = reflect.TypeOf(dest).Elem()
+
+	o.maps = append(o.maps, typesMap)
 
 	return o
 }
 
-// TODO reverse maps extension.
+// Reverse func reverts last created map.
 func (o *Mapper) Reverse() *Mapper {
+	for srcType, destType := range o.maps[len(o.maps)-1] {
+		o.profilesOpts[getProfileKey(srcType, destType)].reverseMap = true
+	}
+
 	return o
 }
 
-// TODO slices mapping extension.
-func (o *Mapper) MapSlices() *Mapper {
-	return o
-}
-
+// Init func fills profiles from provided types maps.
 func (o *Mapper) Init() {
-	for src, dest := range o.maps {
-		srcMeta := o.getTypeMeta(src)
-		if srcMeta != nil {
-			o.profiles[src] = srcMeta
-		}
+	// parse logger flags
+	flag.Parse()
 
-		destMeta := o.getTypeMeta(dest)
-		if destMeta != nil {
-			o.profiles[dest] = destMeta
+	for _, typesMap := range o.maps {
+		for srcType, destType := range typesMap {
+			// check for provided types kind.
+			// if not struct - skip.
+			if srcType.Kind() != reflect.Struct {
+				glog.Errorf("expected reflect.Struct kind for type %s, but got %s", srcType.String(), srcType.Kind().String())
+				continue
+			}
+
+			if destType.Kind() != reflect.Struct {
+				glog.Errorf("expected reflect.Struct kind for type %s, but got %s", destType.String(), destType.Kind().String())
+				continue
+			}
+
+			// if a reverse flag for given types exists add reverse map
+			if options, ok := o.profilesOpts[getProfileKey(srcType, destType)]; ok &&
+				options.reverseMap {
+				typesMap[destType] = srcType
+			}
+
+			// profile is slice of src and dest structs fields names
+			var profile [][2]string
+
+			// get types metadata
+			srcMeta := o.getTypeMeta(srcType)
+			destMeta := o.getTypeMeta(destType)
+
+			for srcKey, srcTag := range srcMeta.keysToTags {
+				// case src key equals dest key
+				if _, ok := destMeta.keysToTags[srcKey]; ok {
+					profile = append(profile, [2]string{srcKey, srcKey})
+					continue
+				}
+
+				// case src key equals dest tag
+				if destKey, ok := destMeta.tagsToKeys[srcKey]; ok {
+					profile = append(profile, [2]string{srcKey, destKey})
+					continue
+				}
+
+				// case src tag equals dest key
+				if _, ok := destMeta.keysToTags[srcTag]; ok {
+					profile = append(profile, [2]string{srcKey, srcTag})
+					continue
+				}
+
+				// case src tag equals dest tag
+				if destKey, ok := destMeta.tagsToKeys[srcTag]; ok {
+					profile = append(profile, [2]string{srcKey, destKey})
+					continue
+				}
+			}
+
+			// save profile with unique srcKey for provided types
+			o.profiles[getProfileKey(srcType, destType)] = profile
 		}
+	}
+
+	o.isInitialised = true
+}
+
+// getTypeMeta func fetches struct fields keysToTags, types and Mapper tags.
+func (o *Mapper) getTypeMeta(val reflect.Type) typeMeta {
+	fieldsNum := val.NumField()
+
+	keysToTags := make(map[string]string)
+	tagsToKeys := make(map[string]string)
+
+	for i := 0; i < fieldsNum; i++ {
+		field := val.Field(i)
+		fieldName := field.Name
+		fieldTag := field.Tag.Get("Mapper")
+
+		keysToTags[fieldName] = fieldTag
+		tagsToKeys[fieldTag] = fieldName
+	}
+
+	return typeMeta{
+		keysToTags: keysToTags,
+		tagsToKeys: tagsToKeys,
 	}
 }
 
-// getTypeMeta func fetches struct keys and mapper tags, e.g. map[key]tag.
-func (o *Mapper) getTypeMeta(val reflect.Type) map[string]string {
-	if val.Kind() != reflect.Struct {
-		return nil
-	}
-
-	fieldsCount := val.NumField()
-
-	res := make(map[string]string, fieldsCount)
-
-	for i := 0; i < fieldsCount; i++ {
-		typeField := val.Field(i)
-		res[typeField.Name] = typeField.Tag.Get("mapper")
-	}
-
-	return res
-}
-
+// Map func checks for initialised Mapper and starts types mapping process.
+// Should be called ONLY after Init function call.
 func (o *Mapper) Map(src interface{}, dest interface{}) {
-	srcVal := reflect.ValueOf(src)
+	// stop mapping if Mapper was not initialised
+	if !o.isInitialised {
+		glog.Error("uninitialised Mapper usage is permitted. You should call Init() func before Map() calling")
+		return
+	}
 
+	// check if provided dest has pointer kind.
 	destVal := reflect.ValueOf(dest)
 	if destVal.Kind() != reflect.Ptr {
 		glog.Errorf("provided destination has invalid kind: expected reflect.Ptr, got: %s", destVal.Kind().String())
 		return
 	}
 
-	if srcVal.Kind() != destVal.Elem().Kind() {
-		glog.Errorf("unable to map %s into %s", srcVal.Kind().String(), destVal.Elem().Kind().String())
-		return
-	}
-
-	switch srcVal.Kind() {
-	case reflect.Struct:
-		o.mapStructs(srcVal, destVal.Elem())
-	case reflect.Slice:
-		o.mapSlices(srcVal, destVal.Elem())
-	case reflect.Map:
-		glog.Infoln("not supported yet")
-		return
-	case reflect.Ptr:
-		glog.Infoln("not supported yet")
-		return
-	default:
-		return
-	}
-}
-
-// mapStructs func perform structs casts.
-func (o *Mapper) mapStructs(src reflect.Value, dest reflect.Value) {
-	// Get structs types
-	// if types are equal set dest slice
-	if src.Type() == dest.Type() {
-		dest.Set(src)
-		return
-	}
-
-	// Get structs types
-	// if types were not registered - abort
-	if o.maps[src.Type()] != dest.Type() {
-		glog.Errorf("no maps specified for types %s and %s", src.Type().String(), dest.Type().String())
-		return
-	}
-
-	// get keys and tags maps foe src and dest structs
-	srcMap, ok := o.profiles[src.Type()]
-	if !ok {
-		glog.Errorf("no profile specfied for %s", dest.Type().String())
-		return
-	}
-
-	destMap, ok := o.profiles[dest.Type()]
-	if !ok {
-		glog.Errorf("no profile specfied for %s", dest.Type().String())
-		return
-	}
-
-	// iterate over struct fields and map values
-	for key, tag := range srcMap {
-		// TODO resolve dest tagging problem, now only src tags has value
-		if _, ok := destMap[key]; !ok {
-			if _, ok := destMap[tag]; !ok {
-				continue
-			}
-		}
-
-		srcVal := src.FieldByName(key)
-		destVal := dest.FieldByName(key)
-
-		o.processValues(srcVal, destVal)
-	}
-}
-
-// mapSlices func perform slices casts.
-func (o *Mapper) mapSlices(src reflect.Value, dest reflect.Value) {
-	// Get slice type
-	// if types are equal set dest slice
-	if src.Type() == dest.Type() {
-		dest.Set(src)
-		return
-	}
-
-	// Get slice type
-	// if types were not registered - abort
-	if o.maps[src.Type()] != dest.Type() {
-		glog.Errorf("no maps specified for types %s and %s", src.Type().String(), dest.Type().String())
-		return
-	}
-
-	// Make dest slice
-	dest.Set(reflect.MakeSlice(dest.Type(), src.Len(), src.Cap()))
-
-	// Get each element of slice
-	// check its kind and try to map/set dest
-	for i := 0; i < src.Len(); i++ {
-		srcVal := src.Index(i)
-		destVal := dest.Index(i)
-
-		o.processValues(srcVal, destVal)
-	}
+	// start values processing
+	o.processValues(reflect.ValueOf(src), destVal.Elem())
 }
 
 // processValues func resolve src and dest values kind
@@ -182,7 +191,13 @@ func (o *Mapper) processValues(src reflect.Value, dest reflect.Value) {
 
 	// check if kinds are equal
 	if srcKind != destKind {
-		// TODO dynamic cast, m.b. with mapper extensions
+		// TODO dynamic cast, m.b. with Mapper extensions
+		return
+	}
+
+	// if types are equal set dest value
+	if src.Type() == dest.Type() {
+		dest.Set(src)
 		return
 	}
 
@@ -194,12 +209,73 @@ func (o *Mapper) processValues(src reflect.Value, dest reflect.Value) {
 	case reflect.Slice:
 		o.mapSlices(src, dest)
 	case reflect.Map:
-		glog.Infoln("not supported yet")
-		return
+		o.mapMaps(src, dest)
 	case reflect.Ptr:
-		glog.Infoln("not supported yet")
-		return
+		o.mapPointers(src, dest)
 	default:
 		dest.Set(src)
+	}
+}
+
+// mapStructs func perform structs casts.
+func (o *Mapper) mapStructs(src reflect.Value, dest reflect.Value) {
+	// get values types
+	// if types or their slices were not registered - abort
+	profile, ok := o.profiles[getProfileKey(src.Type(), dest.Type())]
+	if !ok {
+		glog.Errorf("no conversion specified for types %s and %s", src.Type().String(), dest.Type().String())
+		return
+	}
+
+	// iterate over struct fields and map values
+	for _, keys := range profile {
+		o.processValues(src.FieldByName(keys[SrcKeyIndex]), dest.FieldByName(keys[DestKeyIndex]))
+	}
+}
+
+// mapSlices func perform slices casts.
+func (o *Mapper) mapSlices(src reflect.Value, dest reflect.Value) {
+	// Make dest slice
+	dest.Set(reflect.MakeSlice(dest.Type(), src.Len(), src.Cap()))
+
+	// Get each element of slice
+	// process values mapping
+	for i := 0; i < src.Len(); i++ {
+		srcVal := src.Index(i)
+		destVal := dest.Index(i)
+
+		o.processValues(srcVal, destVal)
+	}
+}
+
+// mapPointers func perform pointers casts.
+func (o *Mapper) mapPointers(src reflect.Value, dest reflect.Value) {
+	// create new struct from provided dest type
+	val := reflect.New(dest.Type().Elem()).Elem()
+
+	o.processValues(src.Elem(), val)
+
+	// assign address of initialised struct to destination
+	dest.Set(val.Addr())
+}
+
+// mapMaps func perform maps casts.
+func (o *Mapper) mapMaps(src reflect.Value, dest reflect.Value) {
+	// Make dest map
+	dest.Set(reflect.MakeMapWithSize(dest.Type(), src.Len()))
+
+	// Get each element of map as key-values
+	// process keys and values mapping and update dest map
+	srcMapIter := src.MapRange()
+	destMapIter := dest.MapRange()
+
+	for destMapIter.Next() && srcMapIter.Next() {
+		destKey := reflect.New(destMapIter.Key().Type()).Elem()
+		destValue := reflect.New(destMapIter.Value().Type()).Elem()
+
+		o.processValues(srcMapIter.Key(), destKey)
+		o.processValues(srcMapIter.Value(), destValue)
+
+		dest.SetMapIndex(destKey, destValue)
 	}
 }

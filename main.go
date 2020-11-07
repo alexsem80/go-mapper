@@ -10,26 +10,30 @@ func main() {
 		Name:   "Name",
 		Weight: 32.32,
 		Marks:  []int32{2, 3, 4},
-		Address: []NestedSource{
+		Address: []*NestedSource{
 			{
 				State: "RYA",
-				Index: 3900,
+				Index: map[int]SourceMapType{
+					1: {Name: "Name1"},
+				},
 			},
 			{
 				State: "MOW",
-				Index: 4700,
+				Index: map[int]SourceMapType{
+					2: {Name: "Name2"},
+				},
 			},
 		},
 	}
 
 	dest := &Destination{}
 
-	mapper := mapper.NewMapper()
-	mapper.CreateMap((*Source)(nil), (*Destination)(nil))
-	mapper.CreateMap((*NestedSource)(nil), (*NestedDestination)(nil))
-	mapper.Init()
+	testMapper := mapper.NewMapper()
+	testMapper.CreateMap((*Source)(nil), (*Destination)(nil))
+	testMapper.CreateMap((*NestedSource)(nil), (*NestedDestination)(nil))
+	testMapper.Init()
 
-	mapper.Map(src, dest)
+	testMapper.Map(src, dest)
 }
 
 type Source struct {
@@ -37,23 +41,31 @@ type Source struct {
 	Name    string
 	Weight  float32
 	Marks   []int32
-	Address []NestedSource
+	Address []*NestedSource
 }
 
 type NestedSource struct {
 	State string
-	Index int
+	Index map[int]SourceMapType
 }
 
 type Destination struct {
-	Id      int
-	Name    string
-	Weight  float32
-	Marks   []int32
-	Address []NestedDestination
+	Id        int
+	FirstName string `mapper:"Name"`
+	Weight    float32
+	Marks     []int32
+	Address   []*NestedDestination
 }
 
 type NestedDestination struct {
 	State string
-	Index int
+	Index map[int]DestinationMapType
+}
+
+type SourceMapType struct {
+	Name string
+}
+
+type DestinationMapType struct {
+	Name string
 }
