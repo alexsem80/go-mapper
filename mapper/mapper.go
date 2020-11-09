@@ -6,11 +6,8 @@ import (
 	"reflect"
 
 	"github.com/golang/glog"
-)
 
-const (
-	SrcKeyIndex = iota
-	DestKeyIndex
+	"github.com/alexsem80/go-mapper/consts"
 )
 
 // NewMapper func returns new uninitialised Mapper.
@@ -20,7 +17,6 @@ func NewMapper() *Mapper {
 	return &Mapper{
 		isInitialised: false,
 		profiles:      make(map[string][][2]string),
-		profilesOpts:  make(map[string]*profileOptions),
 	}
 }
 
@@ -29,7 +25,6 @@ func NewMapper() *Mapper {
 type Mapper struct {
 	isInitialised bool                            // checks if Mapper was initialised before usage
 	profiles      map[string][][2]string          // map of struct fields: ["srcType_destType"][]["src_key", "dest_key"]
-	profilesOpts  map[string]*profileOptions      // options for profiles, such as reverse mapping, etc
 	maps          []map[reflect.Type]reflect.Type // pairs of types to map
 }
 
@@ -38,11 +33,6 @@ type Mapper struct {
 type typeMeta struct {
 	keysToTags map[string]string
 	tagsToKeys map[string]string
-}
-
-// profileOptions struct contains additional data for structs mapping.
-type profileOptions struct {
-	reverseMap bool
 }
 
 // getProfileKey converts src and dest types in string key representation.
@@ -65,15 +55,6 @@ func (o *Mapper) CreateMap(src interface{}, dest interface{}) *Mapper {
 	return o
 }
 
-// Reverse func reverts last created map.
-func (o *Mapper) Reverse() *Mapper {
-	for srcType, destType := range o.maps[len(o.maps)-1] {
-		o.profilesOpts[getProfileKey(srcType, destType)].reverseMap = true
-	}
-
-	return o
-}
-
 // Init func fills profiles from provided types maps.
 func (o *Mapper) Init() {
 	// parse logger flags
@@ -91,12 +72,6 @@ func (o *Mapper) Init() {
 			if destType.Kind() != reflect.Struct {
 				glog.Errorf("expected reflect.Struct kind for type %s, but got %s", destType.String(), destType.Kind().String())
 				continue
-			}
-
-			// if a reverse flag for given types exists add reverse map
-			if options, ok := o.profilesOpts[getProfileKey(srcType, destType)]; ok &&
-				options.reverseMap {
-				typesMap[destType] = srcType
 			}
 
 			// profile is slice of src and dest structs fields names
@@ -150,10 +125,13 @@ func (o *Mapper) getTypeMeta(val reflect.Type) typeMeta {
 	for i := 0; i < fieldsNum; i++ {
 		field := val.Field(i)
 		fieldName := field.Name
-		fieldTag := field.Tag.Get("Mapper")
+		fieldTag := field.Tag.Get(consts.MapperTagName)
 
 		keysToTags[fieldName] = fieldTag
-		tagsToKeys[fieldTag] = fieldName
+
+		if fieldTag != "" {
+			tagsToKeys[fieldTag] = fieldName
+		}
 	}
 
 	return typeMeta{
@@ -229,7 +207,7 @@ func (o *Mapper) mapStructs(src reflect.Value, dest reflect.Value) {
 
 	// iterate over struct fields and map values
 	for _, keys := range profile {
-		o.processValues(src.FieldByName(keys[SrcKeyIndex]), dest.FieldByName(keys[DestKeyIndex]))
+		o.processValues(src.FieldByName(keys[consts.SrcKeyIndex]), dest.FieldByName(keys[consts.DestKeyIndex]))
 	}
 }
 
@@ -267,11 +245,10 @@ func (o *Mapper) mapMaps(src reflect.Value, dest reflect.Value) {
 	// Get each element of map as key-values
 	// process keys and values mapping and update dest map
 	srcMapIter := src.MapRange()
-	destMapIter := dest.MapRange()
 
-	for destMapIter.Next() && srcMapIter.Next() {
-		destKey := reflect.New(destMapIter.Key().Type()).Elem()
-		destValue := reflect.New(destMapIter.Value().Type()).Elem()
+	for srcMapIter.Next() {
+		destKey := reflect.New(dest.Type().Key()).Elem()
+		destValue := reflect.New(dest.Type().Elem()).Elem()
 
 		o.processValues(srcMapIter.Key(), destKey)
 		o.processValues(srcMapIter.Value(), destValue)
