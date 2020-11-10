@@ -1,4 +1,8 @@
 # go-mapper
+## Installation
+`go get github.com/alexsem80/go-mapper`
+
+## Usage
 
 ```
 package main
