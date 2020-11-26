@@ -150,7 +150,7 @@ func (o *Mapper) getTypeMeta(val reflect.Type) typeMeta {
 	for i := 0; i < fieldsNum; i++ {
 		field := val.Field(i)
 		fieldName := field.Name
-		fieldTag := field.Tag.Get("Mapper")
+		fieldTag := field.Tag.Get("mapper")
 
 		keysToTags[fieldName] = fieldTag
 		tagsToKeys[fieldTag] = fieldName
@@ -185,6 +185,15 @@ func (o *Mapper) Map(src interface{}, dest interface{}) {
 // processValues func resolve src and dest values kind
 // and either recursively calls mapping functions, or sets dest value.
 func (o *Mapper) processValues(src reflect.Value, dest reflect.Value) {
+	// If src of dest is an interface - get underlying type
+	if src.Kind() == reflect.Interface {
+		src = src.Elem()
+	}
+
+	if dest.Kind() == reflect.Interface {
+		dest = dest.Elem()
+	}
+
 	// get provided values' kinds
 	srcKind := src.Kind()
 	destKind := dest.Kind()

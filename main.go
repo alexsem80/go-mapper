@@ -31,13 +31,14 @@ func main() {
 	testMapper := mapper.NewMapper()
 	testMapper.CreateMap((*Source)(nil), (*Destination)(nil))
 	testMapper.CreateMap((*NestedSource)(nil), (*NestedDestination)(nil))
+	testMapper.CreateMap((*SourceMapType)(nil), (*DestinationMapType)(nil))
 	testMapper.Init()
 
 	testMapper.Map(src, dest)
 }
 
 type Source struct {
-	ID      int `mapper:"Id"`
+	ID      int
 	Name    string
 	Weight  float32
 	Marks   []int32
@@ -50,11 +51,11 @@ type NestedSource struct {
 }
 
 type Destination struct {
-	Id        int
-	FirstName string `mapper:"Name"`
-	Weight    float32
-	Marks     []int32
-	Address   []*NestedDestination
+	Id      int `mapper:"ID"`
+	Name    string
+	Weight  float32
+	Marks   []int32
+	Address []*NestedDestination
 }
 
 type NestedDestination struct {
