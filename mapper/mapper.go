@@ -42,12 +42,18 @@ type typeMeta struct {
 
 // profileOptions struct contains additional data for structs mapping.
 type profileOptions struct {
-	reverseMap bool
+	reverseMap      bool
+	typeResolverMap map[string]func(interface{}) interface{}
 }
 
 // getProfileKey converts src and dest types in string key representation.
-func getProfileKey(srcType reflect.Type, destType reflect.Type) string {
+func getProfileKey(srcType, destType reflect.Type) string {
 	return fmt.Sprintf("%s_%s", srcType.Name(), destType.Name())
+}
+
+// getFieldsKey converts src and dest filed names in string key representation.
+func getFieldsKey(srcField, destField string) string {
+	return fmt.Sprintf("%s_%s", srcField, destField)
 }
 
 // CreateMap func creates new spec for types mapping.
@@ -65,10 +71,48 @@ func (o *Mapper) CreateMap(src interface{}, dest interface{}) *Mapper {
 	return o
 }
 
-// Reverse func reverts last created map.
+// Reverse func adds reverted last created map.
 func (o *Mapper) Reverse() *Mapper {
 	for srcType, destType := range o.maps[len(o.maps)-1] {
 		o.profilesOpts[getProfileKey(srcType, destType)].reverseMap = true
+	}
+
+	return o
+}
+
+func (o *Mapper) ResolveField(srcFieldName, destFieldName string, resolver func(interface{}) interface{}) *Mapper {
+	for srcType, destType := range o.maps[len(o.maps)-1] {
+		srcField, ok := srcType.FieldByName(srcFieldName)
+		if !ok {
+			glog.Fatalf("no field with name %s found for type %s", srcFieldName, srcType.Name())
+		}
+
+		destField, ok := destType.FieldByName(destFieldName)
+		if !ok {
+			glog.Fatalf("no field with name %s found for type %s", destFieldName, destType.Name())
+		}
+
+		resolverMeta := reflect.TypeOf(resolver)
+		resolverInParamsNumber := resolverMeta.NumIn()
+		resolverOutParamsNumber := resolverMeta.NumOut()
+
+		if resolverInParamsNumber != 1 || resolverOutParamsNumber != 1 {
+			glog.Fatalf("invalid resolver func signature for types %s and %s", srcType.Name(), destType.Name())
+		}
+
+		inParam := resolverMeta.In(0)
+		outParam := resolverMeta.Out(0)
+
+		if srcField.Type != reflect.TypeOf(inParam) {
+			glog.Fatalf("invalid resolver in param type %s, expected %s", inParam.Name(), srcField.Type.Name())
+		}
+
+		if destField.Type != reflect.TypeOf(outParam) {
+			glog.Fatalf("invalid resolver out param type %s, expected %s", outParam.Name(), destField.Type.Name())
+		}
+
+		typeResolverMap := map[string]func(interface{}) interface{}{getFieldsKey(srcFieldName, destFieldName): resolver}
+		o.profilesOpts[getProfileKey(srcType, destType)].typeResolverMap = typeResolverMap
 	}
 
 	return o
@@ -84,13 +128,11 @@ func (o *Mapper) Init() {
 			// check for provided types kind.
 			// if not struct - skip.
 			if srcType.Kind() != reflect.Struct {
-				glog.Errorf("expected reflect.Struct kind for type %s, but got %s", srcType.String(), srcType.Kind().String())
-				continue
+				glog.Fatalf("expected reflect.Struct kind for type %s, but got %s", srcType.String(), srcType.Kind().String())
 			}
 
 			if destType.Kind() != reflect.Struct {
-				glog.Errorf("expected reflect.Struct kind for type %s, but got %s", destType.String(), destType.Kind().String())
-				continue
+				glog.Fatalf("expected reflect.Struct kind for type %s, but got %s", destType.String(), destType.Kind().String())
 			}
 
 			// if a reverse flag for given types exists add reverse map
@@ -172,6 +214,12 @@ func (o *Mapper) Map(src interface{}, dest interface{}) {
 	}
 
 	// check if provided dest has pointer kind.
+	srcVal := reflect.ValueOf(src)
+	if srcVal.Kind() == reflect.Ptr {
+		srcVal.Elem()
+	}
+
+	// check if provided dest has pointer kind.
 	destVal := reflect.ValueOf(dest)
 	if destVal.Kind() != reflect.Ptr {
 		glog.Errorf("provided destination has invalid kind: expected reflect.Ptr, got: %s", destVal.Kind().String())
@@ -179,7 +227,7 @@ func (o *Mapper) Map(src interface{}, dest interface{}) {
 	}
 
 	// start values processing
-	o.processValues(reflect.ValueOf(src), destVal.Elem())
+	o.processValues(srcVal, destVal.Elem())
 }
 
 // processValues func resolve src and dest values kind
@@ -205,7 +253,6 @@ func (o *Mapper) processValues(src reflect.Value, dest reflect.Value) {
 
 	// check if kinds are equal
 	if srcKind != destKind {
-		// TODO dynamic cast, m.b. with Mapper extensions
 		return
 	}
 
