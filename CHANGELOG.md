@@ -1,3 +1,10 @@
+## 0.0.5 (2020-11-29)
+- Add invalid kinds handling
+
+## 0.0.4 (2020-11-25)
+- Fix mapper tag bug
+- Add an interface underlying fields mapping
+
 ## 0.0.3 (2020-11-10)
 - Implement maps mapping
 - Fix tags mapping

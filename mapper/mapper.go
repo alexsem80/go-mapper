@@ -185,7 +185,7 @@ func (o *Mapper) Map(src interface{}, dest interface{}) {
 // processValues func resolve src and dest values kind
 // and either recursively calls mapping functions, or sets dest value.
 func (o *Mapper) processValues(src reflect.Value, dest reflect.Value) {
-	// If src of dest is an interface - get underlying type
+	// if src of dest is an interface - get underlying type
 	if src.Kind() == reflect.Interface {
 		src = src.Elem()
 	}
@@ -197,6 +197,11 @@ func (o *Mapper) processValues(src reflect.Value, dest reflect.Value) {
 	// get provided values' kinds
 	srcKind := src.Kind()
 	destKind := dest.Kind()
+
+	// skip invalid kinds
+	if srcKind == reflect.Invalid || destKind == reflect.Invalid {
+		return
+	}
 
 	// check if kinds are equal
 	if srcKind != destKind {
